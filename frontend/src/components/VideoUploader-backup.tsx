@@ -14,19 +14,6 @@ export default function VideoUploader({ onUploadSuccess }: VideoUploaderProps) {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
     if (selectedFile) {
-      // Validate file size (5GB max)
-      if (selectedFile.size > 5000 * 1024 * 1024) {
-        setError('File size must be less than 5GB')
-        return
-      }
-
-      // Validate file type
-      const videoTypes = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-matroska']
-      if (!videoTypes.some(type => selectedFile.type.startsWith('video'))) {
-        setError('Please select a valid video file')
-        return
-      }
-
       setFile(selectedFile)
       setError(null)
     }
@@ -34,9 +21,8 @@ export default function VideoUploader({ onUploadSuccess }: VideoUploaderProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-
     if (!file) {
-      setError('Please select a file first')
+      setError('Please select a video file')
       return
     }
 
@@ -46,36 +32,18 @@ export default function VideoUploader({ onUploadSuccess }: VideoUploaderProps) {
 
     try {
       const formData = new FormData()
-      // ⚠️ Important: Field name must match backend multer configuration
-      // Backend expects 'video' field name
-      formData.append('video', file)
+      formData.append('file', file)
 
       const response = await axios.post('http://localhost:5000/api/video/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        timeout: 300000, // 5 minutes
+        headers: { 'Content-Type': 'multipart/form-data' }
       })
 
-      if (response.data.success && response.data.job_id) {
-        setSuccess(`Video uploaded successfully! Job ID: ${response.data.job_id}`)
-        setFile(null)
-
-        // Reset file input
-        const fileInput = document.getElementById('video-file') as HTMLInputElement
-        if (fileInput) {
-          fileInput.value = ''
-        }
-
-        // Call parent callback
+      setSuccess(`✅ Video uploaded successfully! Job ID: ${response.data.job_id}`)
+      setTimeout(() => {
         onUploadSuccess(response.data.job_id)
-      } else {
-        setError(response.data.error || 'Upload failed')
-      }
+      }, 1000)
     } catch (err: any) {
-      const errorMessage = err.response?.data?.error || err.message || 'Upload failed'
-      setError(errorMessage)
-      console.error('Upload error:', err)
+      setError(err.response?.data?.error || 'Failed to upload video')
     } finally {
       setLoading(false)
     }
@@ -84,7 +52,7 @@ export default function VideoUploader({ onUploadSuccess }: VideoUploaderProps) {
   return (
     <div className="component-card">
       <h2 className="component-title">📹 Upload Video</h2>
-
+      
       <form onSubmit={handleSubmit}>
         <div className="form-group">
           <label htmlFor="video-file">Select Video File</label>
@@ -96,7 +64,7 @@ export default function VideoUploader({ onUploadSuccess }: VideoUploaderProps) {
             disabled={loading}
           />
           <p style={{ marginTop: '8px', color: '#718096', fontSize: '0.9rem' }}>
-            Supported formats: MP4, MKV, AVI, MOV, FLV, WebM, WMV (Max 5GB)
+            Supported formats: MP4, MKV, AVI, MOV, FLV, WebM, WMV
           </p>
         </div>
 
@@ -110,12 +78,13 @@ export default function VideoUploader({ onUploadSuccess }: VideoUploaderProps) {
         {error && <div className="alert alert-error">{error}</div>}
         {success && <div className="alert alert-success">{success}</div>}
 
-        <button 
-          type="submit" 
+        <button
+          type="submit"
+          className="btn-primary"
           disabled={!file || loading}
-          className="btn btn-primary btn-lg btn-block"
+          style={{ width: '100%' }}
         >
-          {loading ? '⏳ Uploading...' : '📤 Upload Video'}
+          {loading ? '⏳ Uploading...' : '🚀 Upload Video'}
         </button>
       </form>
     </div>

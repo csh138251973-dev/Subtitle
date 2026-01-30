@@ -1,179 +1,176 @@
 import express, { Request, Response } from 'express';
-import SpeechRecognizerService from '../services/speechRecognizer.js';
-import TranslationService from '../services/translator.js';
-import SubtitleGeneratorService from '../services/subtitleGenerator.js';
+import SpeechRecognizer from '../services/speechRecognizer.js';
 import OCRService from '../services/ocrService.js';
-import QualityVerifierService from '../services/qualityVerifier.js';
-import DomainKnowledgeService from '../services/domainKnowledge.js';
+import TranslatorService from '../services/translator.js';
+import SubtitleGeneratorService from '../services/subtitleGenerator.js';
+import QualityVerifier from '../services/qualityVerifier.js';
+import { jobStorage } from '../utils/jobStorage.js';
+import path from 'path';
+import fs from 'fs';
 
 const router = express.Router();
-
-let processingJobs: Record<string, any> = {};
-
-router.use((req, res, next) => {
-  processingJobs = (req as any).processingJobs || processingJobs;
-  (req as any).processingJobs = processingJobs;
-  next();
-});
 
 // Generate subtitles from audio
 router.post('/generate-from-audio', async (req: Request, res: Response) => {
   try {
     const { job_id, language = 'en' } = req.body;
 
-    if (!processingJobs[job_id]) {
+    if (!jobStorage.hasJob(job_id)) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    const job = processingJobs[job_id];
-
-    if (!job.audio_path) {
-      return res.status(400).json({ error: 'Audio not extracted yet' });
+    const job = jobStorage.getJob(job_id);
+    if (!job || !job.audio_path) {
+      return res.status(400).json({ error: 'Audio path not found. Please extract audio first.' });
     }
 
-    const recognizer = new SpeechRecognizerService();
-    const result = await recognizer.transcribeAudio(job.audio_path, language);
+    const speechRecognizer = new SpeechRecognizer();
+    const result = await speechRecognizer.transcribeAudio(job.audio_path, language);
 
-    if (!result.success) {
-      return res.status(500).json({ error: result.message });
+    if (result && result.subtitles && result.subtitles.length > 0) {
+      jobStorage.setJob(job_id, {
+        subtitles: result.subtitles,
+        status: 'completed',
+      });
+
+      console.log(`🎯 Subtitles generated: ${job_id} - ${result.subtitles.length} segments`);
+
+      res.json({
+        success: true,
+        job_id,
+        subtitles: result.subtitles.slice(0, 10),
+        total_segments: result.subtitles.length,
+        message: `Generated ${result.subtitles.length} subtitle segments`,
+      });
+    } else {
+      res.status(500).json({ error: 'Failed to generate subtitles from audio' });
     }
-
-    job.subtitles = result.subtitles;
-    job.subtitle_language = language;
-    job.status = 'subtitles_generated';
-
-    console.log(`🎯 Subtitles generated: ${job_id} - ${result.subtitles.length} segments`);
-
-    res.json({
-      job_id,
-      subtitles: result.subtitles.slice(0, 10),
-      total_segments: result.subtitles.length,
-      language,
-      message: `Generated ${result.subtitles.length} subtitle segments`
-    });
   } catch (error: any) {
-    console.error('Subtitle generation error:', error);
+    console.error('Generate audio subtitles error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// OCR subtitle extraction from video
+// Generate subtitles from OCR
 router.post('/generate-from-ocr', async (req: Request, res: Response) => {
   try {
     const { job_id } = req.body;
 
-    if (!processingJobs[job_id]) {
+    if (!jobStorage.hasJob(job_id)) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    const job = processingJobs[job_id];
-    const videoPath = job.video_path;
-
-    const ocrService = new OCRService();
-    const result = await ocrService.extractSubtitlesFromVideo(videoPath);
-
-    if (!result.success) {
-      return res.status(500).json({ error: result.message });
+    const job = jobStorage.getJob(job_id);
+    if (!job || !job.video_path) {
+      return res.status(400).json({ error: 'Video path not found' });
     }
 
-    job.ocr_subtitles = result.subtitles;
-    job.status = 'ocr_processed';
+    const ocrService = new OCRService();
+    const result = await ocrService.extractSubtitlesFromVideo(job.video_path);
 
-    console.log(`📸 OCR subtitles extracted: ${job_id} - ${result.subtitles.length} segments`);
+    if (result && result.subtitles && result.subtitles.length > 0) {
+      jobStorage.setJob(job_id, {
+        subtitles: result.subtitles,
+        status: 'completed',
+      });
 
-    res.json({
-      job_id,
-      subtitles: result.subtitles.slice(0, 10),
-      total_segments: result.subtitles.length,
-      message: `Extracted ${result.subtitles.length} subtitles from video frames`
-    });
+      console.log(`📸 OCR subtitles extracted: ${job_id} - ${result.subtitles.length} segments`);
+
+      res.json({
+        success: true,
+        job_id,
+        subtitles: result.subtitles.slice(0, 10),
+        total_segments: result.subtitles.length,
+        message: `Extracted ${result.subtitles.length} subtitles from video frames`,
+      });
+    } else {
+      res.status(500).json({ error: 'Failed to extract subtitles from video' });
+    }
   } catch (error: any) {
-    console.error('OCR error:', error);
+    console.error('Generate OCR subtitles error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Translate subtitles to Chinese
+// Translate subtitles
 router.post('/translate', async (req: Request, res: Response) => {
   try {
     const { job_id, detect_domain = true } = req.body;
 
-    if (!processingJobs[job_id]) {
+    if (!jobStorage.hasJob(job_id)) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    const job = processingJobs[job_id];
-    const subtitles = job.subtitles || job.ocr_subtitles;
-
-    if (!subtitles) {
-      return res.status(400).json({ error: 'No subtitles to translate' });
+    const job = jobStorage.getJob(job_id);
+    if (!job || !job.subtitles || job.subtitles.length === 0) {
+      return res.status(400).json({ error: 'No subtitles found. Generate subtitles first.' });
     }
 
-    // Detect domain
+    const subtitles = job.subtitles;
+    const translator = new TranslatorService();
+
+    // Detect domain if requested
     let domain = null;
-    if (detect_domain && subtitles.length > 0) {
-      domain = DomainKnowledgeService.detectDomain(subtitles[0].text);
+    if (detect_domain) {
+      const textContent = subtitles.map((s: any) => s.text).join(' ');
+      domain = translator.detectDomain(textContent);
     }
 
-    const translator = new TranslationService();
-    const translated = await translator.translateSubtitles(subtitles, 'zh-CN', domain);
+    // Translate to Chinese
+    const translated = await translator.translateSubtitles(subtitles, 'zh-CN', domain || undefined);
 
-    job.translated_subtitles = translated;
-    job.target_language = 'zh-CN';
-    job.detected_domain = domain;
-    job.status = 'subtitles_translated';
+    jobStorage.setJob(job_id, {
+      translated_subtitles: translated,
+    });
 
     console.log(`🌐 Subtitles translated: ${job_id} - Domain: ${domain}`);
 
     res.json({
+      success: true,
       job_id,
+      domain,
       translated_subtitles: translated.slice(0, 10),
       total_segments: translated.length,
-      target_language: 'zh-CN',
-      detected_domain: domain,
-      message: `Translated ${translated.length} subtitles to Chinese`
+      message: 'Subtitles translated to Chinese',
     });
   } catch (error: any) {
-    console.error('Translation error:', error);
+    console.error('Translate error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Verify translation quality
+// Verify quality
 router.post('/verify', async (req: Request, res: Response) => {
   try {
     const { job_id } = req.body;
 
-    if (!processingJobs[job_id]) {
+    if (!jobStorage.hasJob(job_id)) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    const job = processingJobs[job_id];
-
-    if (!job.translated_subtitles) {
-      return res.status(400).json({ error: 'No translated subtitles to verify' });
+    const job = jobStorage.getJob(job_id);
+    if (!job || (!job.subtitles && !job.translated_subtitles)) {
+      return res.status(400).json({ error: 'No subtitles to verify' });
     }
 
-    const verifier = new QualityVerifierService();
-    const report = verifier.generateQualityReport(
-      job.translated_subtitles,
-      job.subtitles || job.ocr_subtitles,
-      job.metadata?.duration,
-      job.detected_domain
-    );
+    const subtitlesToVerify = job.translated_subtitles || job.subtitles;
+    const verifier = new QualityVerifier();
+    const report = verifier.verifyQuality(subtitlesToVerify);
 
-    job.quality_report = report;
-    job.status = 'quality_verified';
+    jobStorage.setJob(job_id, {
+      quality_report: report,
+    });
 
     console.log(`✅ Quality verification: ${job_id} - Score: ${report.overall_quality_score}`);
 
     res.json({
+      success: true,
       job_id,
       quality_report: report,
-      message: 'Quality verification complete'
+      message: 'Quality verification completed',
     });
   } catch (error: any) {
-    console.error('Verification error:', error);
+    console.error('Verify error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -181,47 +178,46 @@ router.post('/verify', async (req: Request, res: Response) => {
 // Export subtitles
 router.get('/export/:jobId', async (req: Request, res: Response) => {
   try {
-    const { jobId } = req.params;
-    const format = req.query.format || 'srt';
+    const jobId = req.params.jobId;
+    const format = (req.query.format as string) || 'srt'; // srt or vtt
 
-    if (!processingJobs[jobId]) {
+    if (!jobStorage.hasJob(jobId)) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    const job = processingJobs[jobId];
-
-    if (!job.translated_subtitles) {
+    const job = jobStorage.getJob(jobId);
+    if (!job || (!job.subtitles && !job.translated_subtitles)) {
       return res.status(400).json({ error: 'No subtitles to export' });
     }
 
-    const tempDir = req.app.get('tempDir');
-    const subtitleGenerator = new SubtitleGeneratorService();
+    const subtitles = job.translated_subtitles || job.subtitles;
+    const filePath = path.join(process.cwd(), 'temp', `${jobId}.${format === 'vtt' ? 'vtt' : 'srt'}`);
 
-    let filePath: string;
-    let filename: string;
-    let mimeType: string;
-
-    if (format === 'vtt') {
-      filePath = `${tempDir}/export_${jobId}.vtt`;
-      filename = `${jobId}.vtt`;
-      mimeType = 'text/vtt';
-      await subtitleGenerator.createVTTSubtitle(job.translated_subtitles, filePath);
-    } else {
-      filePath = `${tempDir}/export_${jobId}.srt`;
-      filename = `${jobId}.srt`;
-      mimeType = 'text/plain';
-      await subtitleGenerator.createSRTSubtitle(job.translated_subtitles, filePath);
+    // Ensure temp directory exists
+    const tempDir = path.dirname(filePath);
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    console.log(`💾 Subtitle exported: ${jobId}`);
+    // Generate subtitle file
+    const subtitleGenerator = new SubtitleGeneratorService();
+    if (format === 'vtt') {
+      await SubtitleGeneratorService.createVTTSubtitle(subtitles, filePath);
+    } else {
+      await SubtitleGeneratorService.createSRTSubtitle(subtitles, filePath);
+    }
 
-    res.download(filePath, filename, (err) => {
-      if (err) console.error('Download error:', err);
-      setTimeout(() => {
-        if (require('fs').existsSync(filePath)) {
-          require('fs').unlinkSync(filePath);
-        }
-      }, 1000);
+    res.download(filePath, `subtitles.${format}`, (err) => {
+      if (err) {
+        console.error('Download error:', err);
+      } else {
+        // Clean up file after download
+        setTimeout(() => {
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        }, 5000);
+      }
     });
   } catch (error: any) {
     console.error('Export error:', error);

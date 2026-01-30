@@ -4,7 +4,6 @@ import SubtitleGenerator from './components/SubtitleGenerator'
 import SubtitleTranslator from './components/SubtitleTranslator'
 import SubtitleExporter from './components/SubtitleExporter'
 import QualityVerifier from './components/QualityVerifier'
-import './App.css'
 
 function App() {
   const [jobId, setJobId] = useState<string | null>(null)

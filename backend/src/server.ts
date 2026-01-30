@@ -4,9 +4,22 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegStatic from 'ffmpeg-static';
+import ffprobeStatic from 'ffprobe-static';
 
 // Load environment variables
 dotenv.config();
+
+// Setup FFmpeg paths using npm packages
+if (ffmpegStatic) {
+  ffmpeg.setFfmpegPath(ffmpegStatic);
+  console.log('✅ FFmpeg path set from npm package');
+}
+if (ffprobeStatic && ffprobeStatic.path) {
+  ffmpeg.setFfprobePath(ffprobeStatic.path);
+  console.log('✅ FFprobe path set from npm package');
+}
 
 import videoRoutes from './routes/video.js';
 import subtitleRoutes from './routes/subtitle.js';
