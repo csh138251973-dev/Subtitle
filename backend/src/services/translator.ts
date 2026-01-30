@@ -10,6 +10,11 @@ export default class TranslationService {
     });
   }
 
+  detectDomain(text: string): string | null {
+    // Detect domain from text content
+    return DomainKnowledgeService.detectDomain(text);
+  }
+
   async translateSubtitles(subtitles: any[], targetLanguage = 'zh-CN', domain?: string) {
     const translated = [];
 
